@@ -1,0 +1,192 @@
+import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet';
+import { useEffect, useRef } from 'react';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+import 'leaflet.heat';
+
+// ── Heatmap layer (no react-leaflet wrapper exists, so we build one) ──
+function HeatmapLayer({ points, options = {} }) {
+  const map = useMap();
+  const heatLayerRef = useRef(null);
+
+  useEffect(() => {
+    if (heatLayerRef.current) {
+      map.removeLayer(heatLayerRef.current);
+    }
+
+    if (points.length === 0) return;
+
+    const defaults = {
+      radius: 12,
+      blur: 14,
+      maxZoom: 17,
+      max: 10,
+      minOpacity: 0.15,
+      gradient: {
+        0.1: '#2563eb88',
+        0.3: '#22d3ee99',
+        0.5: '#34d399aa',
+        0.7: '#fbbf24bb',
+        0.9: '#f97316cc',
+        1.0: '#ef4444dd',
+      },
+    };
+
+    const heat = L.heatLayer(points, { ...defaults, ...options });
+    heat.addTo(map);
+    heatLayerRef.current = heat;
+
+    return () => {
+      if (heatLayerRef.current) {
+        map.removeLayer(heatLayerRef.current);
+      }
+    };
+  }, [points, options, map]);
+
+  return null;
+}
+
+// ── Severity color — uses the ACTUAL data range (4.9–5.4 avg_severity) ──
+// OLD thresholds: >=7 red, >=4 amber — but avg_severity across clusters
+// ranges only 5.0–5.4 so red NEVER triggered. Fixed to use relative
+// thresholds within the actual data range.
+function severityColor(severity) {
+  if (severity >= 5.25) return '#ef4444';  // red — top quartile of actual range
+  if (severity >= 5.1)  return '#f97316';  // orange
+  if (severity >= 4.95) return '#f59e0b';  // amber
+  return '#22c55e';                        // green
+}
+
+// ── Main HotspotMap component ──
+export default function HotspotMap({ hotspots, loading }) {
+  // Bengaluru center
+  const center = [12.9716, 77.5946];
+
+  // Build heatmap points from all cluster point data: [lat, lng, intensity]
+  const heatPoints = [];
+  const clusterMarkers = [];
+
+  if (hotspots && hotspots.clusters) {
+    for (const cluster of hotspots.clusters) {
+      // Cluster centroid marker
+      clusterMarkers.push(cluster);
+
+      // Individual points for heatmap
+      if (cluster.points) {
+        for (const pt of cluster.points) {
+          heatPoints.push([pt.lat, pt.lng, pt.severity || 5]);
+        }
+      }
+    }
+  }
+
+  const hasData = clusterMarkers.length > 0 || heatPoints.length > 0;
+
+  return (
+    <div className="relative w-full h-full rounded-2xl overflow-hidden border border-white/10">
+      {loading && (
+        <div className="absolute inset-0 z-[1000] bg-surface-900/80 backdrop-blur-sm flex items-center justify-center">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-8 h-8 border-3 border-primary-500/30 border-t-primary-400 rounded-full animate-spin"></div>
+            <p className="text-sm text-slate-400">Computing hotspots...</p>
+          </div>
+        </div>
+      )}
+
+      {/* Empty state when date range returns no incidents */}
+      {!loading && !hasData && (
+        <div className="absolute inset-0 z-[999] flex items-center justify-center bg-surface-900/60 backdrop-blur-sm rounded-2xl">
+          <div className="text-center p-8">
+            <svg className="w-12 h-12 mx-auto mb-3 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+            </svg>
+            <p className="text-sm font-medium text-slate-400">No hotspots found</p>
+            <p className="text-xs text-slate-600 mt-1">Try adjusting the date range to include more incidents.</p>
+          </div>
+        </div>
+      )}
+
+      <MapContainer
+        center={center}
+        zoom={12}
+        style={{ height: '100%', width: '100%', background: '#0f172a' }}
+        zoomControl={false}
+      >
+        <TileLayer
+          attribution='&copy; <a href="https://carto.com/">CARTO</a>'
+          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+          className="map-tiles-boosted"
+        />
+
+        {/* Heatmap overlay */}
+        <HeatmapLayer points={heatPoints} />
+
+        {/* Cluster centroid markers */}
+        {clusterMarkers.map((cluster) => {
+          const color = severityColor(cluster.avg_severity);
+          return (
+            <CircleMarker
+              key={cluster.cluster_id}
+              center={[cluster.centroid.lat, cluster.centroid.lng]}
+              radius={Math.max(6, Math.min(20, cluster.incident_count / 4))}
+              pathOptions={{
+                color: color,
+                fillColor: color,
+                fillOpacity: 0.5,
+                weight: 2,
+              }}
+            >
+              <Popup>
+                <div style={{ color: '#1e293b', minWidth: 180, fontFamily: 'Inter, sans-serif' }}>
+                  <p style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>
+                    Hotspot #{cluster.cluster_id + 1}
+                  </p>
+                  <p style={{ fontSize: 12, margin: '2px 0' }}>
+                    <strong>Incidents:</strong> {cluster.incident_count}
+                  </p>
+                  <p style={{ fontSize: 12, margin: '2px 0' }}>
+                    <strong>Dominant:</strong> {cluster.dominant_crime_type}
+                  </p>
+                  <p style={{ fontSize: 12, margin: '2px 0' }}>
+                    <strong>Avg Severity:</strong> {cluster.avg_severity}
+                  </p>
+                  <p style={{ fontSize: 12, margin: '2px 0' }}>
+                    <strong>Radius:</strong> {cluster.radius_m}m
+                  </p>
+                </div>
+              </Popup>
+            </CircleMarker>
+          );
+        })}
+      </MapContainer>
+
+      {/* Legend overlay */}
+      <div className="absolute bottom-4 left-4 z-[1000] glass-card px-4 py-3">
+        <p className="text-xs font-semibold text-slate-300 mb-2">Cluster Severity</p>
+        <div className="flex items-center gap-3 text-xs">
+          <span className="flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-full" style={{ backgroundColor: '#22c55e' }}></span>
+            Low
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-full" style={{ backgroundColor: '#f59e0b' }}></span>
+            Med
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded-full" style={{ backgroundColor: '#ef4444' }}></span>
+            High
+          </span>
+        </div>
+      </div>
+
+      {/* Stats overlay */}
+      {hotspots && (
+        <div className="absolute top-4 right-4 z-[1000] glass-card px-4 py-3">
+          <p className="text-xs font-semibold text-slate-300">
+            {hotspots.n_clusters} clusters &middot; {hotspots.n_incidents} incidents
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
