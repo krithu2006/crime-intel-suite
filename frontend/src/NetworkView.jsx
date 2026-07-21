@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { API_URL } from './config.js';
 import ForceGraph2D from 'react-force-graph-2d';
 
 // A simple color palette for communities
@@ -196,7 +197,7 @@ export function NetworkSidebar({ selectedNodeId, network, onClear }) {
       return;
     }
     setLoading(true);
-    fetch(`/api/network/individual/${selectedNodeId}`)
+    fetch(`${API_URL}/api/network/individual/${selectedNodeId}`)
       .then(r => r.json())
       .then(data => {
         setPerson(data);

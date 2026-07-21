@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { API_URL } from './config.js';
 import HotspotMap from './HotspotMap.jsx';
 import RiskScoreMap from './RiskScoreMap.jsx';
 import RisingZones from './RisingZones.jsx';
@@ -37,7 +38,7 @@ function App() {
 
   // ── Fetch health ──
   useEffect(() => {
-    fetch('/api/health')
+    fetch(`${API_URL}/api/health`)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -54,7 +55,7 @@ function App() {
 
   // ── Fetch districts ──
   useEffect(() => {
-    fetch('/api/districts')
+    fetch(`${API_URL}/api/districts`)
       .then((res) => { if (res.ok) return res.json(); })
       .then((data) => { if (data?.data) setDistrictsList(data.data); })
       .catch(console.error);
@@ -67,7 +68,7 @@ function App() {
     if (dateFrom) params.set('from', dateFrom);
     if (dateTo) params.set('to', dateTo);
     if (selectedDistrict) params.set('district', selectedDistrict);
-    fetch(`/api/hotspots?${params}`)
+    fetch(`${API_URL}/api/hotspots?${params}`)
       .then((res) => res.json())
       .then((data) => { setHotspots(data); setHotspotsLoading(false); })
       .catch(() => setHotspotsLoading(false));
@@ -76,7 +77,7 @@ function App() {
   // ── Fetch escalation ──
   const fetchEscalation = useCallback(() => {
     setEscalationLoading(true);
-    fetch('/api/escalation?period=monthly')
+    fetch(`${API_URL}/api/escalation?period=monthly`)
       .then((res) => res.json())
       .then((data) => { setEscalation(data); setEscalationLoading(false); })
       .catch(() => setEscalationLoading(false));
@@ -89,7 +90,7 @@ function App() {
     if (dateFrom) params.set('from', dateFrom);
     if (dateTo) params.set('to', dateTo);
     if (selectedDistrict) params.set('district', selectedDistrict);
-    fetch(`/api/risk-scores?${params}`)
+    fetch(`${API_URL}/api/risk-scores?${params}`)
       .then((res) => res.json())
       .then((data) => { setRiskScores(data); setRiskLoading(false); })
       .catch(() => setRiskLoading(false));
@@ -102,7 +103,7 @@ function App() {
     if (dateFrom) params.set('from', dateFrom);
     if (dateTo) params.set('to', dateTo);
     if (selectedDistrict) params.set('district', selectedDistrict);
-    fetch(`/api/network?${params}`)
+    fetch(`${API_URL}/api/network?${params}`)
       .then((res) => res.json())
       .then((data) => { setNetwork(data); setNetworkLoading(false); })
       .catch(() => setNetworkLoading(false));
@@ -187,7 +188,7 @@ function App() {
             </div>
             <h2 className="text-xl font-semibold text-white mb-2">Backend Unreachable</h2>
             <p className="text-slate-400 mb-4">
-              Could not connect to the API server. Make sure the backend is running on <code className="font-mono text-primary-400">localhost:8000</code>.
+              Could not connect to the API server. Make sure the backend is running on <code className="font-mono text-primary-400">{API_URL}</code>.
             </p>
             <p className="text-sm text-slate-500 font-mono">Error: {error}</p>
           </div>
