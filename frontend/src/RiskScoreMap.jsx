@@ -3,8 +3,9 @@
  * Shows CircleMarkers at ward centroids, colored by risk level.
  * Clicking a ward shows a popup card with score, explanation, and top factors.
  */
-import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet';
-import { useEffect, useRef } from 'react';
+import { MapContainer, TileLayer, CircleMarker, Popup, ScaleControl, ZoomControl, useMap } from 'react-leaflet';
+import { useState } from 'react';
+import { useEffect } from 'react';
 import 'leaflet/dist/leaflet.css';
 
 // Saturated, distinct color steps: green → amber → orange → red
@@ -19,6 +20,15 @@ function riskColor(level) {
   return RISK_COLORS[level] || RISK_COLORS.moderate;
 }
 
+function FitMapToWards({ wards }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!wards.length) return;
+    map.fitBounds(wards.map((ward) => [ward.lat, ward.lng]), { padding: [36, 36], maxZoom: 9 });
+  }, [wards, map]);
+  return null;
+}
+
 function riskGradient(score) {
   if (score >= 75) return '#ef4444';
   if (score >= 50) return '#f97316';
@@ -27,12 +37,16 @@ function riskGradient(score) {
 }
 
 export default function RiskScoreMap({ riskScores, loading }) {
-  const center = [12.9716, 77.5946];
+  const [mapStyle, setMapStyle] = useState('map');
+  const center = [14.5, 76.2];
 
   const wards = riskScores?.wards || [];
+  const searchLabel = wards.length > 0
+    ? `${wards.length} ward risk scores near Bengaluru`
+    : 'Search Karnataka ward risk';
 
   return (
-    <div className="relative w-full h-full rounded-2xl overflow-hidden border border-white/10">
+    <div className="google-map-shell relative w-full h-full overflow-hidden border border-white/10">
       {loading && (
         <div className="absolute inset-0 z-[1000] bg-surface-900/80 backdrop-blur-sm flex items-center justify-center">
           <div className="flex flex-col items-center gap-3">
@@ -58,14 +72,19 @@ export default function RiskScoreMap({ riskScores, loading }) {
       <MapContainer
         center={center}
         zoom={12}
-        style={{ height: '100%', width: '100%', background: '#0f172a' }}
+        style={{ height: '100%', width: '100%', background: '#e5e3df' }}
         zoomControl={false}
       >
         <TileLayer
-          attribution='&copy; <a href="https://carto.com/">CARTO</a>'
-          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-          className="map-tiles-boosted"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          url={mapStyle === 'satellite'
+            ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+            : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'}
+          className="map-tiles-google-like"
         />
+        <ZoomControl position="bottomright" />
+        <ScaleControl position="bottomleft" imperial={false} />
+        <FitMapToWards wards={wards} />
 
         {wards.map((ward) => {
           const colors = riskColor(ward.risk_level);
@@ -91,10 +110,22 @@ export default function RiskScoreMap({ riskScores, loading }) {
         })}
       </MapContainer>
 
+      <div className="google-map-search absolute left-4 right-4 top-4 z-[1000] sm:right-auto sm:w-[390px]">
+        <svg className="h-5 w-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m21 21-4.35-4.35m1.35-5.15a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z" />
+        </svg>
+        <span className="truncate text-sm font-medium text-slate-700">{searchLabel}</span>
+      </div>
+
+      <div className="google-map-layers absolute left-4 top-20 z-[1000]">
+        <button className={mapStyle === 'map' ? 'is-active' : ''} type="button" onClick={() => setMapStyle('map')}>Map</button>
+        <button className={mapStyle === 'satellite' ? 'is-active' : ''} type="button" onClick={() => setMapStyle('satellite')}>Satellite</button>
+      </div>
+
       {/* Legend */}
-      <div className="absolute bottom-4 left-4 z-[1000] glass-card px-4 py-3">
-        <p className="text-xs font-semibold text-slate-300 mb-2">Risk Level</p>
-        <div className="flex items-center gap-3 text-xs">
+      <div className="google-map-card absolute bottom-8 left-4 z-[1000] px-4 py-3">
+        <p className="text-xs font-semibold text-slate-700 mb-2">Risk Level</p>
+        <div className="flex items-center gap-3 text-xs text-slate-600">
           {[
             { label: 'Low', color: '#22c55e' },
             { label: 'Moderate', color: '#eab308' },
@@ -111,8 +142,8 @@ export default function RiskScoreMap({ riskScores, loading }) {
 
       {/* Score range indicator */}
       {riskScores?.model_info && (
-        <div className="absolute top-4 right-4 z-[1000] glass-card px-4 py-3">
-          <p className="text-xs font-semibold text-slate-300">
+        <div className="google-map-card absolute right-4 top-4 z-[1000] hidden px-4 py-3 sm:block">
+          <p className="text-xs font-semibold text-slate-700">
             {wards.length} wards scored
           </p>
         </div>

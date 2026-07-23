@@ -48,15 +48,39 @@ CCTNS and e-FIR platforms rather than requiring new data collection.
 
 ## Getting Started
 
-### Backend
+### One command
+```bash
+python run.py
+```
+
+This starts the FastAPI API on `http://localhost:8000` and the React dashboard
+on `http://localhost:5173`. You can also run the same launcher with:
+
+```bash
+npm run dev
+```
+
+By default, the launcher generates a fresh **synthetic** Karnataka dataset on
+each startup, then imports it into SQLite. To use your own CSV unchanged, set
+`DATA_MODE=csv` in `backend/.env`; the launcher then validates and imports
+`data/karnataka_crime.csv` on every startup, replacing the previous imported
+dataset. Required columns are `district`, `crime_type`,
+`timestamp` (ISO-8601), `latitude`, and `longitude`; optional columns are
+`fir_number`, `ward`, `severity` (1-10), and `description`.
+
+### Backend only
 ```bash
 cd backend
 pip install -r requirements.txt
-python app/seed.py    # generates the synthetic dataset
+python -m app.csv_import  # imports data/karnataka_crime.csv
 python run.py         # starts the API on http://localhost:8000
 ```
 
-### Frontend
+To enable the floating chatbot's ChatGPT-style ask-anything mode, create
+`backend/.env` from `backend/.env.example` and set `OPENAI_API_KEY`, then
+restart the backend.
+
+### Frontend only
 ```bash
 cd frontend
 npm install

@@ -12,11 +12,17 @@ Endpoints:
   GET /api/risk-score                  → single ward risk score with explanation
   GET /api/network                     → offender co-occurrence graph
   GET /api/network/individual/{id}     → single accused details + connections
+  POST /api/ai-chat                    → AI assistant for dashboard and general Q&A
 """
 
+import json
+import os
+from urllib import request, error
+from pathlib import Path
 from datetime import datetime
 from fastapi import FastAPI, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -25,6 +31,32 @@ from .models import Incident, Accused, DistrictSocioEconomic, Ward, incident_acc
 from .analytics import detect_hotspots, compute_escalation
 from .risk_scoring import compute_risk_scores
 from .network_analysis import build_network, get_individual
+
+
+class AiChatRequest(BaseModel):
+    question: str
+    dashboard_context: dict | None = None
+
+
+def _load_local_env() -> None:
+    """Load backend/.env during local development without requiring a package."""
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_local_env()
+
 
 # Create tables if they don't exist (idempotent)
 Base.metadata.create_all(bind=engine)
@@ -266,6 +298,28 @@ def get_network_individual(
     return result
 
 
+@app.post("/api/ai-chat")
+def ai_chat(payload: AiChatRequest):
+    """
+    General assistant endpoint.
+
+    If OPENAI_API_KEY is configured, the assistant can answer broad questions
+    while using the dashboard context. Without a key, it returns a deterministic
+    local answer so the demo remains usable offline.
+    """
+    question = payload.question.strip()
+    if not question:
+        return {"answer": "Ask me anything about the dashboard or a general question."}
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if api_key:
+        answer = _call_openai_chat(question, payload.dashboard_context or {}, api_key)
+        if answer:
+            return {"answer": answer}
+
+    return {"answer": _offline_chat_answer(question, payload.dashboard_context or {})}
+
+
 def _parse_date(s: str | None) -> datetime | None:
     """Parse an ISO date string or return None."""
     if not s:
@@ -274,3 +328,80 @@ def _parse_date(s: str | None) -> datetime | None:
         return datetime.fromisoformat(s)
     except ValueError:
         return None
+
+
+def _call_openai_chat(question: str, dashboard_context: dict, api_key: str) -> str | None:
+    """Call OpenAI's Responses API using stdlib only, avoiding extra deps."""
+    model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+    body = {
+        "model": model,
+        "input": [
+            {
+                "role": "system",
+                "content": (
+                    "You are the Crime Intel Suite assistant. Answer any user question clearly and briefly. "
+                    "When dashboard context is relevant, use it. Do not claim synthetic demo data is real."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Dashboard context JSON:\n{json.dumps(dashboard_context, ensure_ascii=False)[:12000]}\n\n"
+                    f"Question: {question}"
+                ),
+            },
+        ],
+        "max_output_tokens": 450,
+    }
+    req = request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except (error.URLError, TimeoutError, json.JSONDecodeError):
+        return None
+
+    if data.get("output_text"):
+        return data["output_text"].strip()
+
+    chunks = []
+    for item in data.get("output", []):
+        for content in item.get("content", []):
+            if content.get("type") in {"output_text", "text"} and content.get("text"):
+                chunks.append(content["text"])
+    return "\n".join(chunks).strip() or None
+
+
+def _offline_chat_answer(question: str, dashboard_context: dict) -> str:
+    q = question.lower()
+    summary = dashboard_context.get("summary", {})
+
+    if any(word in q for word in ["hello", "hi", "hey"]):
+        return "Hi. Ask me about this dashboard, crime analytics, policing strategy, or any general topic. Full open-ended AI answers are enabled when OPENAI_API_KEY is set on the backend."
+    if "summary" in q or "summar" in q:
+        return (
+            f"Dashboard summary: {summary.get('incidents', 'available')} incidents, "
+            f"{summary.get('hotspot_clusters', 0)} hotspot clusters, "
+            f"{summary.get('high_risk_wards', 0)} high-risk wards, "
+            f"{summary.get('rising_wards', 0)} rising zones, and "
+            f"{summary.get('network_groups', 0)} network groups in the current filter."
+        )
+    if "crime" in q and ("prevent" in q or "reduce" in q):
+        return "Practical prevention usually combines hotspot patrols, repeat-offender monitoring, community reporting, better lighting/CCTV at repeat locations, and quick follow-up on minor-crime escalation signals."
+    if "ai" in q or "machine learning" in q:
+        return "AI can help by finding hotspot clusters, predicting ward-level risk, explaining top risk factors, and detecting offender networks. It should support investigators, not replace human review."
+    if "police" in q or "patrol" in q:
+        return "A good patrol plan prioritizes high-risk wards, recent hotspot clusters, rising minor-crime zones, and times with repeated incidents, while keeping enough coverage for routine calls."
+
+    return (
+        "Ask-anything mode needs an OpenAI API key on the backend. Add OPENAI_API_KEY to backend/.env, "
+        "restart the backend, and I will answer general questions like ChatGPT. Until then I can answer "
+        "dashboard, crime analytics, policing, AI, and summary questions."
+    )

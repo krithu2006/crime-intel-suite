@@ -74,6 +74,8 @@ def detect_hotspots(
 
     incidents = q.all()
 
+    point_details = [_incident_point(inc) for inc in incidents]
+
     if len(incidents) < min_samples:
         return {
             "params": _params_dict(eps, min_samples, date_from, date_to),
@@ -81,6 +83,7 @@ def detect_hotspots(
             "n_clusters": 0,
             "n_noise": len(incidents),
             "clusters": [],
+            "points": point_details,
         }
 
     # ── Prepare coordinate matrix ──
@@ -119,15 +122,7 @@ def detect_hotspots(
         dominant = max(crime_counts, key=crime_counts.get)
 
         # Point details (limit to avoid huge payloads — send up to 200 per cluster)
-        point_details = []
-        for inc in cluster_incidents[:200]:
-            point_details.append({
-                "lat": inc.lat,
-                "lng": inc.lng,
-                "crime_type": inc.crime_type,
-                "severity": inc.severity,
-                "timestamp": inc.timestamp.isoformat(),
-            })
+        cluster_points = [_incident_point(inc) for inc in cluster_incidents[:200]]
 
         clusters.append({
             "cluster_id": cid,
@@ -137,7 +132,7 @@ def detect_hotspots(
             "dominant_crime_type": dominant,
             "avg_severity": round(float(np.mean(severities)), 2),
             "crime_breakdown": crime_counts,
-            "points": point_details,
+            "points": cluster_points,
         })
 
     # Sort clusters by incident count descending
@@ -149,6 +144,17 @@ def detect_hotspots(
         "n_clusters": n_clusters,
         "n_noise": n_noise,
         "clusters": clusters,
+        "points": point_details,
+    }
+
+
+def _incident_point(incident: Incident) -> dict:
+    return {
+        "lat": incident.lat,
+        "lng": incident.lng,
+        "crime_type": incident.crime_type,
+        "severity": incident.severity,
+        "timestamp": incident.timestamp.isoformat(),
     }
 
 

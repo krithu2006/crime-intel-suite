@@ -29,8 +29,8 @@ function App() {
   const [mapView, setMapView] = useState('hotspots');
 
   // Date range
-  const [dateFrom, setDateFrom] = useState('2025-01-01');
-  const [dateTo, setDateTo] = useState('2025-12-31');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
 
   // District filter
   const [districtsList, setDistrictsList] = useState([]);
@@ -38,20 +38,50 @@ function App() {
 
   // ── Fetch health ──
   useEffect(() => {
-    fetch(`${API_URL}/api/health`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((data) => {
-        setHealth(data);
-        setLoading(false);
-      })
-      .catch((err) => {
-        setError(err.message);
-        setLoading(false);
-      });
+    let cancelled = false;
+    let retryTimer = null;
+    let attempts = 0;
+    const maxAttempts = 40;
+
+    const loadHealth = () => {
+      attempts += 1;
+      fetch(`${API_URL}/api/health`)
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then((data) => {
+          if (cancelled) return;
+          setHealth(data);
+          setError(null);
+          setLoading(false);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          if (attempts < maxAttempts) {
+            retryTimer = window.setTimeout(loadHealth, 1500);
+            return;
+          }
+          setError(err.message);
+          setLoading(false);
+        });
+    };
+
+    loadHealth();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
   }, []);
+
+  // New imports can have a different date range. Start the dashboard with the
+  // range reported by the data source instead of a hard-coded historic year.
+  useEffect(() => {
+    if (!health?.date_range) return;
+    setDateFrom((current) => current || health.date_range.from?.slice(0, 10) || '');
+    setDateTo((current) => current || health.date_range.to?.slice(0, 10) || '');
+  }, [health]);
 
   // ── Fetch districts ──
   useEffect(() => {
@@ -129,6 +159,14 @@ function App() {
     sidePanel = <NetworkSidebar selectedNodeId={selectedNodeId} network={network} onClear={() => setSelectedNodeId(null)} />;
   }
 
+  const availableFrom = health?.date_range?.from?.slice(0, 10) || '';
+  const availableTo = health?.date_range?.to?.slice(0, 10) || '';
+  const quickRanges = availableFrom && availableTo
+    ? [
+        { label: 'All available', from: availableFrom, to: availableTo },
+      ]
+    : [];
+
   return (
     <div className="min-h-screen flex flex-col">
       {/* ── Header ── */}
@@ -188,7 +226,7 @@ function App() {
             </div>
             <h2 className="text-xl font-semibold text-white mb-2">Backend Unreachable</h2>
             <p className="text-slate-400 mb-4">
-              Could not connect to the API server. Make sure the backend is running on <code className="font-mono text-primary-400">{API_URL}</code>.
+              Could not connect to the API server. Make sure the backend is running on <code className="font-mono text-primary-400">{API_URL || '/api'}</code>.
             </p>
             <p className="text-sm text-slate-500 font-mono">Error: {error}</p>
           </div>
@@ -320,15 +358,7 @@ function App() {
 
               {/* Quick range buttons */}
               <div className="flex gap-1 ml-auto">
-                {[
-                  { label: 'Q1', from: '2025-01-01', to: '2025-03-31' },
-                  { label: 'Q2', from: '2025-04-01', to: '2025-06-30' },
-                  { label: 'Q3', from: '2025-07-01', to: '2025-09-30' },
-                  { label: 'Q4', from: '2025-10-01', to: '2025-12-31' },
-                  { label: 'H1', from: '2025-01-01', to: '2025-06-30' },
-                  { label: 'H2', from: '2025-07-01', to: '2025-12-31' },
-                  { label: 'All', from: '2025-01-01', to: '2025-12-31' },
-                ].map(({ label, from, to }) => (
+                {quickRanges.map(({ label, from, to }) => (
                   <button key={label}
                     onClick={() => { setDateFrom(from); setDateTo(to); }}
                     className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
@@ -381,9 +411,9 @@ function App() {
             })()}
 
             {/* ── Map + Side Panel (with view transition) ── */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6" style={{ height: '600px' }}>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:h-[600px]">
               {/* Map/Graph takes 2/3 */}
-              <div className="lg:col-span-2 h-full view-transition">
+              <div className="lg:col-span-2 h-[560px] sm:h-[600px] lg:h-full view-transition">
                 {mapView === 'hotspots'
                   ? <HotspotMap hotspots={hotspots} loading={hotspotsLoading} />
                   : mapView === 'risk'
@@ -393,7 +423,7 @@ function App() {
               </div>
 
               {/* Side panel takes 1/3 — consistent padding/rounding */}
-              <div className="h-full overflow-hidden glass-card p-4 sm:p-5 view-transition">
+              <div className="h-[460px] sm:h-[520px] lg:h-full overflow-hidden glass-card p-4 sm:p-5 view-transition">
                 {sidePanel}
               </div>
             </div>
@@ -412,6 +442,18 @@ function App() {
       <footer className="border-t border-white/5 py-4 text-center text-xs text-slate-600">
         Crime Intel Suite v0.4 — Karnataka State Police Datathon
       </footer>
+
+      <AiAssistantWidget
+        health={health}
+        hotspots={hotspots}
+        escalation={escalation}
+        riskScores={riskScores}
+        network={network}
+        mapView={mapView}
+        selectedDistrict={selectedDistrict}
+        dateFrom={dateFrom}
+        dateTo={dateTo}
+      />
     </div>
   );
 }
@@ -541,6 +583,292 @@ function StatCard({ icon, label, value, color, borderColor }) {
       </div>
     </div>
   );
+}
+
+function AiAssistantWidget({
+  health,
+  hotspots,
+  escalation,
+  riskScores,
+  network,
+  mapView,
+  selectedDistrict,
+  dateFrom,
+  dateTo,
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [question, setQuestion] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [messages, setMessages] = useState([
+    {
+      role: 'assistant',
+      text: 'Hi, I can summarize this dashboard or answer questions from the current crime intelligence data.',
+    },
+  ]);
+
+  const context = {
+    health,
+    hotspots,
+    escalation,
+    riskScores,
+    network,
+    mapView,
+    selectedDistrict,
+    dateFrom,
+    dateTo,
+  };
+
+  const addAssistantMessage = (text) => {
+    setMessages((prev) => [...prev, { role: 'assistant', text }]);
+  };
+
+  const handleSummary = () => {
+    addAssistantMessage(buildDashboardSummary(context));
+    setIsOpen(true);
+  };
+
+  const handleAsk = async (event) => {
+    event.preventDefault();
+    const trimmed = question.trim();
+    if (!trimmed || aiLoading) return;
+
+    setMessages((prev) => [
+      ...prev,
+      { role: 'user', text: trimmed },
+      { role: 'assistant', text: 'Thinking...' },
+    ]);
+    setQuestion('');
+    setAiLoading(true);
+
+    try {
+      const response = await fetch(`${API_URL}/api/ai-chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: trimmed,
+          dashboard_context: buildAssistantContext(context),
+        }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      replaceLastAssistantMessage(data.answer || answerDashboardQuestion(trimmed, context));
+    } catch {
+      replaceLastAssistantMessage(answerDashboardQuestion(trimmed, context));
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const replaceLastAssistantMessage = (text) => {
+    setMessages((prev) => {
+      const next = [...prev];
+      const lastIndex = next.length - 1;
+      if (next[lastIndex]?.role === 'assistant') {
+        next[lastIndex] = { role: 'assistant', text };
+      }
+      return next;
+    });
+  };
+
+  return (
+    <div className="ai-assistant">
+      {isOpen && (
+        <section className="ai-assistant-panel" aria-label="AI dashboard assistant">
+          <div className="flex items-start justify-between gap-3 border-b border-white/10 px-4 py-3">
+            <div>
+              <h2 className="text-sm font-bold text-white">AI Summary Assistant</h2>
+              <p className="text-[11px] text-slate-500">
+                {selectedDistrict || 'All districts'} &middot; {formatDate(dateFrom)} to {formatDate(dateTo)}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsOpen(false)}
+              className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
+              aria-label="Close assistant"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18 18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          <div className="ai-assistant-messages custom-scrollbar">
+            {messages.map((message, index) => (
+              <div key={`${message.role}-${index}`} className={`ai-message ${message.role}`}>
+                {message.text}
+              </div>
+            ))}
+          </div>
+
+          <div className="border-t border-white/10 p-3">
+            <button
+              type="button"
+              onClick={handleSummary}
+              className="mb-2 w-full rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-500"
+            >
+              Generate Summary
+            </button>
+            <form onSubmit={handleAsk} className="flex gap-2">
+              <input
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+                disabled={aiLoading}
+                placeholder="Ask anything..."
+                className="min-w-0 flex-1 rounded-lg border border-white/10 bg-surface-900 px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-slate-600 focus:border-primary-400"
+              />
+              <button
+                type="submit"
+                disabled={aiLoading}
+                className="rounded-lg bg-white/10 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/15"
+                aria-label="Ask assistant"
+              >
+                {aiLoading ? '...' : 'Ask'}
+              </button>
+            </form>
+          </div>
+        </section>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setIsOpen((value) => !value)}
+        className="ai-assistant-button"
+        aria-label="Open AI assistant"
+      >
+        <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8V4m-5 8a5 5 0 0 1 10 0v3a3 3 0 0 1-3 3h-4a3 3 0 0 1-3-3v-3Z" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h.01M15 13h.01M7 18l-2 2v-4" />
+        </svg>
+        <span className="sr-only">AI Summary</span>
+      </button>
+    </div>
+  );
+}
+
+function buildAssistantContext(context) {
+  const { health, hotspots, escalation, riskScores, network, mapView, selectedDistrict, dateFrom, dateTo } = context;
+  const topCluster = [...(hotspots?.clusters || [])].sort((a, b) => b.incident_count - a.incident_count)[0];
+  const topRiskWards = [...(riskScores?.wards || [])].sort((a, b) => b.risk_score - a.risk_score).slice(0, 8);
+  const risingWards = (escalation?.wards || []).filter((ward) => ward.trending_up).slice(0, 8);
+
+  return {
+    selectedDistrict: selectedDistrict || 'All Districts',
+    dateFrom,
+    dateTo,
+    currentView: viewLabel(mapView),
+    summary: {
+      incidents: health?.incidents ?? null,
+      accused: health?.accused ?? null,
+      wards: health?.wards ?? null,
+      hotspot_clusters: hotspots?.n_clusters ?? 0,
+      hotspot_incidents: hotspots?.n_incidents ?? 0,
+      high_risk_wards: (riskScores?.wards || []).filter((ward) => ward.risk_score >= 50).length,
+      rising_wards: (escalation?.wards || []).filter((ward) => ward.trending_up).length,
+      network_groups: network?.summary?.n_communities ?? 0,
+      network_individuals: network?.summary?.n_nodes ?? 0,
+    },
+    topCluster: topCluster
+      ? {
+          id: topCluster.cluster_id + 1,
+          incidents: topCluster.incident_count,
+          dominantCrimeType: topCluster.dominant_crime_type,
+          averageSeverity: topCluster.avg_severity,
+        }
+      : null,
+    topRiskWards: topRiskWards.map((ward) => ({
+      ward: ward.ward_name,
+      district: ward.district,
+      score: Math.round(ward.risk_score),
+      level: ward.risk_level,
+      explanation: ward.explanation,
+    })),
+    risingWards: risingWards.map((ward) => ({
+      ward: ward.ward_name,
+      district: ward.district,
+      escalationScore: ward.escalation_score,
+      latestCount: ward.latest_count,
+      latestPeriod: ward.latest_period,
+    })),
+    networkSummary: network?.summary || null,
+  };
+}
+
+function buildDashboardSummary(context) {
+  const { health, hotspots, escalation, riskScores, network, mapView, selectedDistrict, dateFrom, dateTo } = context;
+  const scope = selectedDistrict ? `${selectedDistrict} district` : 'all districts';
+  const topCluster = [...(hotspots?.clusters || [])].sort((a, b) => b.incident_count - a.incident_count)[0];
+  const highRiskWards = (riskScores?.wards || []).filter((ward) => ward.risk_score >= 50);
+  const topRiskWard = [...(riskScores?.wards || [])].sort((a, b) => b.risk_score - a.risk_score)[0];
+  const risingWards = (escalation?.wards || []).filter((ward) => ward.trending_up);
+
+  const lines = [
+    `Summary for ${scope}, ${formatDate(dateFrom)} to ${formatDate(dateTo)}.`,
+    `Current view: ${viewLabel(mapView)}. Dataset has ${health?.incidents?.toLocaleString() ?? 'available'} incidents across ${health?.wards ?? 'multiple'} wards.`,
+  ];
+
+  if (hotspots) {
+    lines.push(`${hotspots.n_clusters ?? 0} hotspot clusters were detected from ${hotspots.n_incidents ?? 0} incidents.`);
+  }
+  if (topCluster) {
+    lines.push(`Largest hotspot is #${topCluster.cluster_id + 1} with ${topCluster.incident_count} incidents, mainly ${topCluster.dominant_crime_type}.`);
+  }
+  if (topRiskWard) {
+    lines.push(`Highest risk ward is ${topRiskWard.ward_name} (${topRiskWard.district}) with score ${Math.round(topRiskWard.risk_score)}.`);
+  }
+  if (riskScores?.wards) {
+    lines.push(`${highRiskWards.length} wards are currently high-risk or critical.`);
+  }
+  if (escalation?.wards) {
+    lines.push(`${risingWards.length} wards show abnormal rising minor-crime trends.`);
+  }
+  if (network?.summary) {
+    lines.push(`Network analysis found ${network.summary.n_communities ?? 0} groups across ${network.summary.n_nodes ?? 0} individuals.`);
+  }
+
+  return lines.join(' ');
+}
+
+function answerDashboardQuestion(question, context) {
+  const q = question.toLowerCase();
+  const { hotspots, escalation, riskScores, network } = context;
+  const topRiskWard = [...(riskScores?.wards || [])].sort((a, b) => b.risk_score - a.risk_score)[0];
+  const highRiskWards = (riskScores?.wards || []).filter((ward) => ward.risk_score >= 50);
+  const topCluster = [...(hotspots?.clusters || [])].sort((a, b) => b.incident_count - a.incident_count)[0];
+  const risingWards = (escalation?.wards || []).filter((ward) => ward.trending_up);
+
+  if (q.includes('summary') || q.includes('summar')) {
+    return buildDashboardSummary(context);
+  }
+  if (q.includes('highest') || q.includes('top risk') || q.includes('risky')) {
+    if (!topRiskWard) return 'Risk score data is still loading or unavailable for this filter. Try the Risk Score View or click Generate Summary again after the dashboard finishes computing.';
+    return `${topRiskWard.ward_name} in ${topRiskWard.district} is the highest-risk ward with score ${Math.round(topRiskWard.risk_score)} (${topRiskWard.risk_level}). ${topRiskWard.explanation}`;
+  }
+  if (q.includes('hotspot') || q.includes('cluster')) {
+    if (!hotspots) return 'Hotspot data is not loaded yet.';
+    if (!topCluster) return 'No hotspot clusters were found for the current filters.';
+    return `${hotspots.n_clusters} clusters were detected from ${hotspots.n_incidents} incidents. The largest is hotspot #${topCluster.cluster_id + 1}, with ${topCluster.incident_count} incidents and dominant crime type ${topCluster.dominant_crime_type}.`;
+  }
+  if (q.includes('rising') || q.includes('escalat') || q.includes('trend')) {
+    if (!escalation?.wards) return 'Escalation data is not loaded yet.';
+    if (risingWards.length === 0) return 'No wards are currently showing abnormal escalation in the selected data.';
+    return `${risingWards.length} wards are trending upward. Top zones: ${risingWards.slice(0, 5).map((ward) => `${ward.ward_name} (+${ward.escalation_score.toFixed(1)})`).join(', ')}.`;
+  }
+  if (q.includes('network') || q.includes('group') || q.includes('accused')) {
+    if (!network?.summary) return 'Network data is not loaded yet.';
+    return `The network view has ${network.summary.n_nodes ?? 0} individuals, ${network.summary.n_edges ?? 0} links, and ${network.summary.n_communities ?? 0} detected groups. Larger nodes usually indicate stronger centrality.`;
+  }
+  if (q.includes('how many') && (q.includes('risk') || q.includes('critical') || q.includes('high'))) {
+    return `${highRiskWards.length} wards are high-risk or critical in the current filter.`;
+  }
+
+  return 'I can answer dashboard questions locally. For broad ask-anything answers, make sure the backend is running with OPENAI_API_KEY configured.';
+}
+
+function viewLabel(mapView) {
+  if (mapView === 'risk') return 'Risk Score View';
+  if (mapView === 'network') return 'Network View';
+  return 'Hotspot View';
 }
 
 function formatDate(isoStr) {

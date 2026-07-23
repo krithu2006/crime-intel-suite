@@ -1,5 +1,5 @@
-import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet';
-import { useEffect, useRef } from 'react';
+import { MapContainer, TileLayer, CircleMarker, Popup, ScaleControl, ZoomControl, useMap } from 'react-leaflet';
+import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet.heat';
@@ -46,6 +46,20 @@ function HeatmapLayer({ points, options = {} }) {
   return null;
 }
 
+function FitMapToHotspots({ clusters, points }) {
+  const map = useMap();
+  useEffect(() => {
+    const locations = clusters.length
+      ? clusters.map((cluster) => [cluster.centroid.lat, cluster.centroid.lng])
+      : points.map((point) => [point.lat, point.lng]);
+    if (!locations.length) return;
+    map.fitBounds(locations, {
+      padding: [36, 36], maxZoom: 9,
+    });
+  }, [clusters, points, map]);
+  return null;
+}
+
 // ── Severity color — uses the ACTUAL data range (4.9–5.4 avg_severity) ──
 // OLD thresholds: >=7 red, >=4 amber — but avg_severity across clusters
 // ranges only 5.0–5.4 so red NEVER triggered. Fixed to use relative
@@ -59,11 +73,11 @@ function severityColor(severity) {
 
 // ── Main HotspotMap component ──
 export default function HotspotMap({ hotspots, loading }) {
-  // Bengaluru center
-  const center = [12.9716, 77.5946];
+  const [mapStyle, setMapStyle] = useState('map');
+  const center = [14.5, 76.2];
 
-  // Build heatmap points from all cluster point data: [lat, lng, intensity]
-  const heatPoints = [];
+  const incidentPoints = hotspots?.points || [];
+  const heatPoints = incidentPoints.map((point) => [point.lat, point.lng, point.severity || 5]);
   const clusterMarkers = [];
 
   if (hotspots && hotspots.clusters) {
@@ -71,19 +85,16 @@ export default function HotspotMap({ hotspots, loading }) {
       // Cluster centroid marker
       clusterMarkers.push(cluster);
 
-      // Individual points for heatmap
-      if (cluster.points) {
-        for (const pt of cluster.points) {
-          heatPoints.push([pt.lat, pt.lng, pt.severity || 5]);
-        }
-      }
     }
   }
 
-  const hasData = clusterMarkers.length > 0 || heatPoints.length > 0;
+  const hasData = incidentPoints.length > 0;
+  const searchLabel = hasData
+    ? `${clusterMarkers.length} hotspot clusters near Bengaluru`
+    : 'Search Karnataka crime hotspots';
 
   return (
-    <div className="relative w-full h-full rounded-2xl overflow-hidden border border-white/10">
+    <div className="google-map-shell relative w-full h-full overflow-hidden border border-white/10">
       {loading && (
         <div className="absolute inset-0 z-[1000] bg-surface-900/80 backdrop-blur-sm flex items-center justify-center">
           <div className="flex flex-col items-center gap-3">
@@ -109,14 +120,20 @@ export default function HotspotMap({ hotspots, loading }) {
       <MapContainer
         center={center}
         zoom={12}
-        style={{ height: '100%', width: '100%', background: '#0f172a' }}
+        style={{ height: '100%', width: '100%', background: '#e5e3df' }}
         zoomControl={false}
       >
         <TileLayer
-          attribution='&copy; <a href="https://carto.com/">CARTO</a>'
-          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-          className="map-tiles-boosted"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          url={mapStyle === 'satellite'
+            ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+            : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'}
+          className="map-tiles-google-like"
         />
+        <ZoomControl position="bottomright" />
+        <ScaleControl position="bottomleft" imperial={false} />
+
+        <FitMapToHotspots clusters={clusterMarkers} points={incidentPoints} />
 
         {/* Heatmap overlay */}
         <HeatmapLayer points={heatPoints} />
@@ -158,12 +175,41 @@ export default function HotspotMap({ hotspots, loading }) {
             </CircleMarker>
           );
         })}
+
+        {clusterMarkers.length === 0 && incidentPoints.map((point, index) => (
+          <CircleMarker
+            key={`${point.lat}-${point.lng}-${index}`}
+            center={[point.lat, point.lng]}
+            radius={4}
+            pathOptions={{ color: '#2563eb', fillColor: '#38bdf8', fillOpacity: 0.75, weight: 1 }}
+          >
+            <Popup>
+              <div style={{ color: '#1e293b', fontFamily: 'Inter, sans-serif' }}>
+                <p style={{ fontWeight: 700, marginBottom: 4 }}>{point.crime_type}</p>
+                <p style={{ fontSize: 12, margin: 0 }}>Severity: {point.severity}/10</p>
+                <p style={{ fontSize: 12, margin: '2px 0 0' }}>{new Date(point.timestamp).toLocaleDateString()}</p>
+              </div>
+            </Popup>
+          </CircleMarker>
+        ))}
       </MapContainer>
 
+      <div className="google-map-search absolute left-4 right-4 top-4 z-[1000] sm:right-auto sm:w-[390px]">
+        <svg className="h-5 w-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m21 21-4.35-4.35m1.35-5.15a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z" />
+        </svg>
+        <span className="truncate text-sm font-medium text-slate-700">{searchLabel}</span>
+      </div>
+
+      <div className="google-map-layers absolute left-4 top-20 z-[1000]">
+        <button className={mapStyle === 'map' ? 'is-active' : ''} type="button" onClick={() => setMapStyle('map')}>Map</button>
+        <button className={mapStyle === 'satellite' ? 'is-active' : ''} type="button" onClick={() => setMapStyle('satellite')}>Satellite</button>
+      </div>
+
       {/* Legend overlay */}
-      <div className="absolute bottom-4 left-4 z-[1000] glass-card px-4 py-3">
-        <p className="text-xs font-semibold text-slate-300 mb-2">Cluster Severity</p>
-        <div className="flex items-center gap-3 text-xs">
+      <div className="google-map-card absolute bottom-8 left-4 z-[1000] px-4 py-3">
+        <p className="text-xs font-semibold text-slate-700 mb-2">Cluster Severity</p>
+        <div className="flex items-center gap-3 text-xs text-slate-600">
           <span className="flex items-center gap-1.5">
             <span className="w-3 h-3 rounded-full" style={{ backgroundColor: '#22c55e' }}></span>
             Low
@@ -181,8 +227,8 @@ export default function HotspotMap({ hotspots, loading }) {
 
       {/* Stats overlay */}
       {hotspots && (
-        <div className="absolute top-4 right-4 z-[1000] glass-card px-4 py-3">
-          <p className="text-xs font-semibold text-slate-300">
+        <div className="google-map-card absolute right-4 top-4 z-[1000] hidden px-4 py-3 sm:block">
+          <p className="text-xs font-semibold text-slate-700">
             {hotspots.n_clusters} clusters &middot; {hotspots.n_incidents} incidents
           </p>
         </div>

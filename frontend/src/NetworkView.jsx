@@ -94,13 +94,12 @@ export function NetworkGraph({ network, loading, onNodeSelect }) {
     ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI, false);
     ctx.fill();
 
-    // Only draw text labels for important nodes, and if not faded out
-    if (!isFaded && (node.tag === 'Central Figure' || node.tag === 'Connector')) {
-      const fontSize = 10 / globalScale;
+    if (!isFaded) {
+      const fontSize = 9 / globalScale;
       ctx.font = `${fontSize}px Sans-Serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
       ctx.fillText(node.name, node.x, node.y + radius + (4 / globalScale));
     }
   }, [highlightedCommunity]);

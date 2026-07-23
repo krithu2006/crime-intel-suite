@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 backend/app/crime_intel.db
 backend/venv/
+backend/.env
+.env
 
 # Node
 frontend/node_modules/
